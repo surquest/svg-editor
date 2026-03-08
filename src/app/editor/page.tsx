@@ -119,19 +119,16 @@ export default function EditorPage() {
     updateAttributes(updates, element);
   };
 
-  const handleAlign = (alignment: string) => {
+const handleAlign = (alignment: string) => {
     if (selectedElements.length < 2) return;
 
-    const bboxes = selectedElements.map(el => {
-      const bbox = (el as unknown as SVGGraphicsElement).getBBox();
-      return { el, x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height };
-    });
-
+    // Helper functions moved to the top so they can be used in the bboxes mapping
     const toNumber = (v: string | null, fallback = 0) => {
       if (!v) return fallback;
       const n = parseFloat(v);
       return Number.isFinite(n) ? n : fallback;
     };
+    
     const fmt = (v: number) => Number(v.toFixed(3)).toString();
 
     const parseTranslate = (v: string | null) => {
@@ -140,13 +137,31 @@ export default function EditorPage() {
       return m ? { tx: parseFloat(m[1] || '0'), ty: parseFloat(m[2] || '0') } : { tx: 0, ty: 0 };
     };
 
+    // Calculate absolute bounding boxes by factoring in current translations
+    const bboxes = selectedElements.map(el => {
+      const svgEl = el as unknown as SVGGraphicsElement;
+      const bbox = svgEl.getBBox();
+      const currentTransform = svgEl.getAttribute('transform');
+      const { tx, ty } = parseTranslate(currentTransform);
+      
+      const out = { 
+        el: svgEl, 
+        x: bbox.x + tx, // Shift local X by the translate X
+        y: bbox.y + ty, // Shift local Y by the translate Y
+        w: bbox.width, 
+        h: bbox.height 
+      };
+      console.log('Element:', svgEl.tagName, 'Absolute BBox:', out);
+      return out;
+    });
+
     let targetValue: number;
     switch (alignment) {
       case 'left':
         targetValue = Math.min(...bboxes.map(b => b.x));
         break;
       case 'center-h':
-        targetValue = bboxes.reduce((s, b) => s + b.x + b.w / 2, 0) / bboxes.length;
+        targetValue = bboxes.reduce((s, b) => s + (b.x + b.w / 2), 0) / bboxes.length;
         break;
       case 'right':
         targetValue = Math.max(...bboxes.map(b => b.x + b.w));
@@ -155,7 +170,7 @@ export default function EditorPage() {
         targetValue = Math.min(...bboxes.map(b => b.y));
         break;
       case 'center-v':
-        targetValue = bboxes.reduce((s, b) => s + b.y + b.h / 2, 0) / bboxes.length;
+        targetValue = bboxes.reduce((s, b) => s + (b.y + b.h / 2), 0) / bboxes.length;
         break;
       case 'bottom':
         targetValue = Math.max(...bboxes.map(b => b.y + b.h));
@@ -174,6 +189,7 @@ export default function EditorPage() {
         case 'center-v':  dy = targetValue - (y + h / 2); break;
         case 'bottom':    dy = targetValue - (y + h); break;
       }
+      
       if (dx === 0 && dy === 0) return;
 
       const tag = el.tagName.toLowerCase();
@@ -187,15 +203,26 @@ export default function EditorPage() {
       } else if (tag === 'circle' || tag === 'ellipse') {
         updates.cx = fmt(toNumber(el.getAttribute('cx')) + dx);
         updates.cy = fmt(toNumber(el.getAttribute('cy')) + dy);
-      } else if (el.hasAttribute('x') && el.hasAttribute('y')) {
+      } else if (tag !== 'g' && el.hasAttribute('x') && el.hasAttribute('y') && !el.getAttribute('transform')?.includes('translate')) {
         updates.x = fmt(toNumber(el.getAttribute('x')) + dx);
         updates.y = fmt(toNumber(el.getAttribute('y')) + dy);
       } else {
-        const { tx, ty } = parseTranslate(el.getAttribute('transform'));
-        updates.transform = `translate(${fmt(tx + dx)}, ${fmt(ty + dy)})`;
+        const currentTransform = el.getAttribute('transform') || '';
+        const { tx, ty } = parseTranslate(currentTransform);
+        // The dx/dy are now reliable global offsets, so we safely add them to the existing translate
+        const newTranslate = `translate(${fmt(tx + dx)}, ${fmt(ty + dy)})`;
+        
+        if (currentTransform.includes('translate')) {
+          updates.transform = currentTransform.replace(/translate\([^)]*\)/, newTranslate);
+        } else if (currentTransform.trim()) {
+          updates.transform = `${currentTransform} ${newTranslate}`;
+        } else {
+          updates.transform = newTranslate;
+        }
       }
-
-      handleElementTransform(el, updates);
+      
+      console.log('Applying alignment transform to', el.tagName, 'Updates:', updates);
+      handleElementTransform(el, updates); // Assuming this is defined elsewhere in your code
     });
   };
 
