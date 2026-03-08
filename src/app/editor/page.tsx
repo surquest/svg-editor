@@ -31,29 +31,53 @@ export default function EditorPage() {
       .catch(err => console.error('Failed to load default SVG:', err));
   }, []);
 
-  const updateAttributes = (updates: Record<string, string>) => {
-    if (!selectedElement || !editor) return;
+  const updateAttributes = (updates: Record<string, string>, targetElement: SVGElement | null = selectedElement) => {
+    if (!targetElement || !editor) return;
 
-    const tagName = selectedElement.tagName.toLowerCase();
-    const classAttr = selectedElement.getAttribute('class');
-    const transformAttr = selectedElement.getAttribute('transform');
-    const idAttr = selectedElement.getAttribute('id');
+    const tagName = targetElement.tagName.toLowerCase();
+    
+    const ownerSvg = targetElement.closest('svg');
+    let elemIndex = -1;
+    if (ownerSvg) {
+      const all = Array.from(ownerSvg.querySelectorAll(tagName));
+      elemIndex = all.indexOf(targetElement);
+    }
 
     const model = editor.getModel();
     const content = model.getValue();
 
-    let markers = [tagName];
-    if (idAttr) markers.push(`id="${idAttr}"`);
-    else if (classAttr) markers.push(`class="${classAttr}"`);
-    else if (transformAttr) markers.push(`transform="${transformAttr}"`);
-
     const lines = content.split('\n');
     let targetLineIndex = -1;
 
-    for (let i = 0; i < lines.length; i++) {
-      if (markers.every(m => lines[i].includes(m))) {
-        targetLineIndex = i;
-        break;
+    if (elemIndex !== -1) {
+      const tagRegex = new RegExp(`<${tagName}\\b`, 'g');
+      let match;
+      let count = -1;
+      while ((match = tagRegex.exec(content)) !== null) {
+        count++;
+        if (count === elemIndex) {
+          const pos = model.getPositionAt(match.index);
+          targetLineIndex = pos.lineNumber - 1;
+          break;
+        }
+      }
+    }
+
+    // Fallback if regex failed
+    if (targetLineIndex === -1) {
+      const classAttr = targetElement.getAttribute('class');
+      const transformAttr = targetElement.getAttribute('transform');
+      const idAttr = targetElement.getAttribute('id');
+      let markers = [tagName];
+      if (idAttr) markers.push(`id="${idAttr}"`);
+      else if (classAttr) markers.push(`class="${classAttr}"`);
+      else if (transformAttr) markers.push(`transform="${transformAttr}"`);
+      
+      for (let i = 0; i < lines.length; i++) {
+        if (markers.every(m => lines[i].includes(m))) {
+          targetLineIndex = i;
+          break;
+        }
       }
     }
 
@@ -64,14 +88,11 @@ export default function EditorPage() {
         const attrRegex = new RegExp(`${name}="[^"]*"`, 'g');
         if (newLine.match(attrRegex)) {
           newLine = newLine.replace(attrRegex, `${name}="${value}"`);
-        } else if (newLine.endsWith(' />')) {
-          newLine = newLine.replace(' />', ` ${name}="${value}" />`);
-        } else if (newLine.includes('>')) {
-          const parts = newLine.split('>');
-          newLine = parts[0] + ` ${name}="${value}"` + '>' + parts.slice(1).join('>');
+        } else {
+          newLine = newLine.replace(/(\s*\/?>)/, ` ${name}="${value}"$1`);
         }
 
-        selectedElement.setAttribute(name, value);
+        targetElement.setAttribute(name, value);
       });
 
       lines[targetLineIndex] = newLine;
@@ -87,43 +108,61 @@ export default function EditorPage() {
         });
         return next;
       });
+
+      setSelectedElement(targetElement);
     }
+  };
+
+  const handleElementTransform = (element: SVGElement, updates: Record<string, string>) => {
+    updateAttributes(updates, element);
   };
 
   const updateAttribute = (name: string, value: string) => {
     if (!selectedElement || !editor) return;
 
-    // Use a unique marker to find the element in the source code
-    // Browser changes outerHTML (attribute order, spacing, quotes)
-    // and this often breaks string replacement.
-    
     const tagName = selectedElement.tagName.toLowerCase();
     
-    // Get unique attributes to refine the search in the model
-    const classAttr = selectedElement.getAttribute('class');
-    const transformAttr = selectedElement.getAttribute('transform');
-    const xAttr = selectedElement.getAttribute('x');
-    const yAttr = selectedElement.getAttribute('y');
+    const ownerSvg = selectedElement.closest('svg');
+    let elemIndex = -1;
+    if (ownerSvg) {
+      const all = Array.from(ownerSvg.querySelectorAll(tagName));
+      elemIndex = all.indexOf(selectedElement);
+    }
 
     const model = editor.getModel();
     const content = model.getValue();
     
-    // Strategy: find the line that contains the key markers of the element
-    let markers = [tagName];
-    if (classAttr) markers.push(`class="${classAttr}"`);
-    if (transformAttr) markers.push(`transform="${transformAttr}"`);
-    if (xAttr && yAttr) markers.push(`x="${xAttr}" y="${yAttr}"`);
-
-    // Simple line-based replacement for reliability
     const lines = content.split('\n');
     let targetLineIndex = -1;
 
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (markers.every(m => line.includes(m))) {
-            targetLineIndex = i;
-            break;
+    if (elemIndex !== -1) {
+      const tagRegex = new RegExp(`<${tagName}\\b`, 'g');
+      let match;
+      let count = -1;
+      while ((match = tagRegex.exec(content)) !== null) {
+        count++;
+        if (count === elemIndex) {
+          const pos = model.getPositionAt(match.index);
+          targetLineIndex = pos.lineNumber - 1;
+          break;
         }
+      }
+    }
+
+    if (targetLineIndex === -1) {
+      let markers = [tagName];
+      const classAttr = selectedElement.getAttribute('class');
+      const transformAttr = selectedElement.getAttribute('transform');
+      if (classAttr) markers.push(`class="${classAttr}"`);
+      if (transformAttr) markers.push(`transform="${transformAttr}"`);
+
+      for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (markers.every(m => line.includes(m))) {
+              targetLineIndex = i;
+              break;
+          }
+      }
     }
 
     if (targetLineIndex !== -1) {
@@ -137,12 +176,7 @@ export default function EditorPage() {
             newLine = line.replace(attrRegex, `${name}="${value}"`);
         } else {
             // Append before the closing tag part
-            if (line.endsWith(' />')) {
-                newLine = line.replace(' />', ` ${name}="${value}" />`);
-            } else if (line.includes('>')) {
-                const parts = line.split('>');
-                newLine = parts[0] + ` ${name}="${value}"` + '>' + parts.slice(1).join('>');
-            }
+            newLine = line.replace(/(\s*\/?>)/, ` ${name}="${value}"$1`);
         }
 
         lines[targetLineIndex] = newLine;
@@ -161,27 +195,47 @@ export default function EditorPage() {
   const updateTextContent = (value: string) => {
     if (!selectedElement || !editor || selectedElement.tagName.toLowerCase() !== 'text') return;
 
+    const tagName = 'text';
+    const ownerSvg = selectedElement.closest('svg');
+    let elemIndex = -1;
+    if (ownerSvg) {
+      const all = Array.from(ownerSvg.querySelectorAll(tagName));
+      elemIndex = all.indexOf(selectedElement as SVGTextElement);
+    }
+
     const model = editor.getModel();
     const content = model.getValue();
-    
-    // Use the same search strategy as updateAttribute
-    const classAttr = selectedElement.getAttribute('class');
-    const transformAttr = selectedElement.getAttribute('transform');
-    const xAttr = selectedElement.getAttribute('x');
-    const yAttr = selectedElement.getAttribute('y');
-
     const lines = content.split('\n');
     let targetLineIndex = -1;
-    let markers = ['text'];
-    if (classAttr) markers.push(`class="${classAttr}"`);
-    if (transformAttr) markers.push(`transform="${transformAttr}"`);
-    if (xAttr && yAttr) markers.push(`x="${xAttr}" y="${yAttr}"`);
 
-    for (let i = 0; i < lines.length; i++) {
-        if (markers.every(m => lines[i].includes(m))) {
+    if (elemIndex !== -1) {
+      const tagRegex = new RegExp(`<${tagName}\\b`, 'g');
+      let match;
+      let count = -1;
+      while ((match = tagRegex.exec(content)) !== null) {
+        count++;
+        if (count === elemIndex) {
+          const pos = model.getPositionAt(match.index);
+          targetLineIndex = pos.lineNumber - 1;
+          break;
+        }
+      }
+    }
+
+    if (targetLineIndex === -1) {
+      let markers = ['text'];
+      const classAttr = selectedElement.getAttribute('class');
+      const transformAttr = selectedElement.getAttribute('transform');
+      if (classAttr) markers.push(`class="${classAttr}"`);
+      if (transformAttr) markers.push(`transform="${transformAttr}"`);
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (markers.every(m => line.includes(m))) {
             targetLineIndex = i;
             break;
         }
+      }
     }
 
     if (targetLineIndex !== -1) {
@@ -231,30 +285,52 @@ export default function EditorPage() {
     if (editor) {
       const model = editor.getModel();
       const content = model.getValue();
-      
-      const id = target.getAttribute('id');
-      const transform = target.getAttribute('transform');
-      const className = target.getAttribute('class');
-      const x = target.getAttribute('x');
-      const y = target.getAttribute('y');
+      const tagName = target.tagName.toLowerCase();
       
       let index = -1;
-
-      if (index === -1 && x && y) {
-        let coordSearch = `x="${x}" y="${y}"`;
-        index = content.indexOf(coordSearch);
+      const ownerSvg = target.closest('svg');
+      let elemIndex = -1;
+      if (ownerSvg) {
+        const all = Array.from(ownerSvg.querySelectorAll(tagName));
+        elemIndex = all.indexOf(target);
       }
 
-      if (index === -1 && transform) {
-          index = content.indexOf(`transform="${transform}"`);
-      }
-
-      if (index === -1 && className) {
-          index = content.indexOf(`class="${className}"`);
+      if (elemIndex !== -1) {
+        const tagRegex = new RegExp(`<${tagName}\\b`, 'g');
+        let match;
+        let count = -1;
+        while ((match = tagRegex.exec(content)) !== null) {
+          count++;
+          if (count === elemIndex) {
+            index = match.index;
+            break;
+          }
+        }
       }
       
       if (index === -1) {
-        index = content.indexOf(`<${target.tagName.toLowerCase()}`);
+        const id = target.getAttribute('id');
+        const transform = target.getAttribute('transform');
+        const className = target.getAttribute('class');
+        const x = target.getAttribute('x');
+        const y = target.getAttribute('y');
+        
+        if (x && y) {
+          let coordSearch = `x="${x}" y="${y}"`;
+          index = content.indexOf(coordSearch);
+        }
+
+        if (index === -1 && transform) {
+            index = content.indexOf(`transform="${transform}"`);
+        }
+
+        if (index === -1 && className) {
+            index = content.indexOf(`class="${className}"`);
+        }
+        
+        if (index === -1) {
+          index = content.indexOf(`<${tagName}`);
+        }
       }
       
       if (index !== -1) {
@@ -289,6 +365,7 @@ export default function EditorPage() {
             <SvgCanvas
               svgCode={svgCode}
               onCanvasClick={handleCanvasClick}
+              onElementTransform={handleElementTransform}
               selectedElement={selectedElement}
             />
           </Panel>
