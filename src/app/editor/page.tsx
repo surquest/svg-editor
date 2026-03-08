@@ -262,9 +262,9 @@ export default function EditorPage() {
       return;
     }
 
-    // Select child shape by default. Use Shift+Click to select the nearest parent <g>.
+    // Select child shape by default. Use Ctrl+Click to select the nearest parent <g>.
     const parentGroup = clicked.closest('g');
-    const shouldSelectGroup = e.shiftKey && parentGroup instanceof SVGElement;
+    const shouldSelectGroup = e.ctrlKey && parentGroup instanceof SVGElement;
     const target = shouldSelectGroup ? (parentGroup as SVGElement) : clicked;
 
     if (target.tagName.toLowerCase() === 'text') {

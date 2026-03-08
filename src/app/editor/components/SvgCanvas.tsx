@@ -41,6 +41,7 @@ export default function SvgCanvas({
       cx: selectedElement.getAttribute('cx'),
       cy: selectedElement.getAttribute('cy'),
       d: selectedElement.getAttribute('d'),
+      vectorEffect: selectedElement.getAttribute('vector-effect'),
     };
   }, [selectedElement]);
 
@@ -132,11 +133,20 @@ export default function SvgCanvas({
     };
 
     const setOutline = () => {
+      activeElement.setAttribute('vector-effect', 'non-scaling-stroke');
       activeElement.style.outline = '2px dashed #1976d2';
       activeElement.style.outlineOffset = '2px';
     };
 
     const clearOutline = () => {
+      if (activeElement.getAttribute('vector-effect') === 'non-scaling-stroke') {
+        const signatureVE = selectionSignature?.vectorEffect;
+        if (signatureVE) {
+          activeElement.setAttribute('vector-effect', signatureVE);
+        } else {
+          activeElement.removeAttribute('vector-effect');
+        }
+      }
       activeElement.style.outline = '';
       activeElement.style.outlineOffset = '';
     };
@@ -216,7 +226,7 @@ export default function SvgCanvas({
       activeElement.tagName.toLowerCase()
     );
 
-    const applyResize = (deltaLeft: number, deltaTop: number, width: number, height: number) => {
+    const applyResize = (deltaLeft: number, deltaTop: number, width: number, height: number, originalSize: { width: number; height: number; strokeWidth: number; rx: number; ry: number }) => {
       const tag = activeElement.tagName.toLowerCase();
       const supportsWH = ['rect', 'image', 'foreignobject'].includes(tag);
       if (!supportsWH) {
@@ -225,10 +235,17 @@ export default function SvgCanvas({
 
       const widthValue = formatNumber(Math.max(1, width));
       const heightValue = formatNumber(Math.max(1, height));
+
       activeElement.setAttribute('width', widthValue);
       activeElement.setAttribute('height', heightValue);
+      activeElement.setAttribute('stroke-width', formatNumber(originalSize.strokeWidth));
+      activeElement.setAttribute('rx', formatNumber(originalSize.rx));
+      // activeElement.setAttribute('ry', formatNumber(originalSize.ry));
       pendingUpdates.width = widthValue;
       pendingUpdates.height = heightValue;
+      pendingUpdates['stroke-width'] = formatNumber(originalSize.strokeWidth);
+      pendingUpdates.rx = formatNumber(originalSize.rx);
+      // pendingUpdates.ry = formatNumber(originalSize.ry);
 
       const needsPositionUpdate = deltaLeft !== 0 || deltaTop !== 0 || activeElement.hasAttribute('x') || activeElement.hasAttribute('y');
       if (needsPositionUpdate) {
@@ -240,7 +257,6 @@ export default function SvgCanvas({
         pendingUpdates.y = nextY;
       }
     };
-
     const interactable = interact(activeElement);
 
     setOutline();
@@ -264,7 +280,17 @@ export default function SvgCanvas({
           move(event) {
             const deltaTopLeft = toSvgDelta(event.deltaRect.left, event.deltaRect.top);
             const sizeDelta = toSvgDelta(event.rect.width, event.rect.height);
-            applyResize(deltaTopLeft.dx, deltaTopLeft.dy, sizeDelta.dx, sizeDelta.dy);
+            // Get all original attributes needed 
+            // for resizing before applying any changes 
+            // to ensure consistent calculations:
+            const originalSize = {
+              width: toNumber(activeElement.getAttribute('width'), activeElement.getBBox().width),
+              height: toNumber(activeElement.getAttribute('height'), activeElement.getBBox().height),
+              strokeWidth: toNumber(activeElement.getAttribute('stroke-width'), 0),
+              rx: toNumber(activeElement.getAttribute('rx'), 0),
+              // ry: toNumber(activeElement.getAttribute('ry'), 0),
+            };
+            applyResize(deltaTopLeft.dx, deltaTopLeft.dy, sizeDelta.dx, sizeDelta.dy, originalSize);
           },
           end() {
             commitPending();
