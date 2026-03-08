@@ -119,6 +119,86 @@ export default function EditorPage() {
     updateAttributes(updates, element);
   };
 
+  const handleAlign = (alignment: string) => {
+    if (selectedElements.length < 2) return;
+
+    const bboxes = selectedElements.map(el => {
+      const bbox = (el as unknown as SVGGraphicsElement).getBBox();
+      return { el, x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height };
+    });
+
+    const toNumber = (v: string | null, fallback = 0) => {
+      if (!v) return fallback;
+      const n = parseFloat(v);
+      return Number.isFinite(n) ? n : fallback;
+    };
+    const fmt = (v: number) => Number(v.toFixed(3)).toString();
+
+    const parseTranslate = (v: string | null) => {
+      if (!v) return { tx: 0, ty: 0 };
+      const m = v.match(/translate\(\s*([-+]?\d*\.?\d+)\s*,?\s*([-+]?\d*\.?\d+)?\s*\)/);
+      return m ? { tx: parseFloat(m[1] || '0'), ty: parseFloat(m[2] || '0') } : { tx: 0, ty: 0 };
+    };
+
+    let targetValue: number;
+    switch (alignment) {
+      case 'left':
+        targetValue = Math.min(...bboxes.map(b => b.x));
+        break;
+      case 'center-h':
+        targetValue = bboxes.reduce((s, b) => s + b.x + b.w / 2, 0) / bboxes.length;
+        break;
+      case 'right':
+        targetValue = Math.max(...bboxes.map(b => b.x + b.w));
+        break;
+      case 'top':
+        targetValue = Math.min(...bboxes.map(b => b.y));
+        break;
+      case 'center-v':
+        targetValue = bboxes.reduce((s, b) => s + b.y + b.h / 2, 0) / bboxes.length;
+        break;
+      case 'bottom':
+        targetValue = Math.max(...bboxes.map(b => b.y + b.h));
+        break;
+      default:
+        return;
+    }
+
+    bboxes.forEach(({ el, x, y, w, h }) => {
+      let dx = 0, dy = 0;
+      switch (alignment) {
+        case 'left':      dx = targetValue - x; break;
+        case 'center-h':  dx = targetValue - (x + w / 2); break;
+        case 'right':     dx = targetValue - (x + w); break;
+        case 'top':       dy = targetValue - y; break;
+        case 'center-v':  dy = targetValue - (y + h / 2); break;
+        case 'bottom':    dy = targetValue - (y + h); break;
+      }
+      if (dx === 0 && dy === 0) return;
+
+      const tag = el.tagName.toLowerCase();
+      const updates: Record<string, string> = {};
+
+      if (tag === 'line') {
+        updates.x1 = fmt(toNumber(el.getAttribute('x1')) + dx);
+        updates.y1 = fmt(toNumber(el.getAttribute('y1')) + dy);
+        updates.x2 = fmt(toNumber(el.getAttribute('x2')) + dx);
+        updates.y2 = fmt(toNumber(el.getAttribute('y2')) + dy);
+      } else if (tag === 'circle' || tag === 'ellipse') {
+        updates.cx = fmt(toNumber(el.getAttribute('cx')) + dx);
+        updates.cy = fmt(toNumber(el.getAttribute('cy')) + dy);
+      } else if (el.hasAttribute('x') && el.hasAttribute('y')) {
+        updates.x = fmt(toNumber(el.getAttribute('x')) + dx);
+        updates.y = fmt(toNumber(el.getAttribute('y')) + dy);
+      } else {
+        const { tx, ty } = parseTranslate(el.getAttribute('transform'));
+        updates.transform = `translate(${fmt(tx + dx)}, ${fmt(ty + dy)})`;
+      }
+
+      handleElementTransform(el, updates);
+    });
+  };
+
   const updateAttribute = (name: string, value: string) => {
     if (!selectedElement || !editor) return;
 
@@ -383,6 +463,7 @@ export default function EditorPage() {
               onCanvasClick={handleCanvasClick}
               onElementTransform={handleElementTransform}
               selectedElements={selectedElements}
+              onAlign={handleAlign}
             />
           </Panel>
 

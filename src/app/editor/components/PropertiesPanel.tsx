@@ -58,7 +58,7 @@ export default function PropertiesPanel({
           Properties: {selectedElements.length > 1 ? `${selectedElements.length} elements` : selectedElement?.tagName}
         </Typography>
         <IconButton onClick={onClose} size="small">
-          <CloseIcon size={20} />
+          <CloseIcon fontSize="small" />
         </IconButton>
       </Box>
       <Divider sx={{ mb: 2 }} />
@@ -122,7 +122,7 @@ export default function PropertiesPanel({
                             }
                           }}
                         >
-                          <Palette size={18} />
+                          <Palette fontSize="small" />
                         </IconButton>
                         <Menu
                           anchorEl={colorPickerAnchor[attr.name]}

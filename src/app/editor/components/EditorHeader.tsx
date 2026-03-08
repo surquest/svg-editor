@@ -9,7 +9,7 @@ export default function EditorHeader() {
       <Toolbar variant="dense">
         <Link href="/" passHref>
           <IconButton edge="start" color="inherit" aria-label="home" sx={{ mr: 2 }}>
-            <HomeIcon size={20} />
+            <HomeIcon fontSize="small" />
           </IconButton>
         </Link>
         <Typography variant="h6" color="inherit" component="div">

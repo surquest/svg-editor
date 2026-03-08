@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Box, Paper } from '@mui/material';
 import interact from 'interactjs';
+import MultiSelectControl from './MultiSelectControl';
 
 interface SvgCanvasProps {
   svgCode: string;
   onCanvasClick: (e: React.MouseEvent) => void;
   onElementTransform: (element: SVGElement, updates: Record<string, string>) => void;
   selectedElements: SVGElement[];
+  onAlign?: (alignment: string) => void;
 }
 
 export default function SvgCanvas({
@@ -14,6 +16,7 @@ export default function SvgCanvas({
   onCanvasClick,
   onElementTransform,
   selectedElements,
+  onAlign,
 }: SvgCanvasProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
 
@@ -233,7 +236,7 @@ export default function SvgCanvas({
       element.tagName.toLowerCase()
     );
 
-    const applyResize = (deltaLeft: number, deltaTop: number, width: number, height: number, element: SVGElement, originalSize: { width: number; height: number; strokeWidth: number; rx: number; ry: number }) => {
+    const applyResize = (deltaLeft: number, deltaTop: number, width: number, height: number, element: SVGElement, originalSize: { strokeWidth: number; rx: number; ry: number }) => {
       const tag = element.tagName.toLowerCase();
       const supportsWH = ['rect', 'image', 'foreignobject'].includes(tag);
       if (!supportsWH) {
@@ -290,10 +293,9 @@ export default function SvgCanvas({
               const deltaTopLeft = toSvgDelta(event.deltaRect.left, event.deltaRect.top, element);
               const sizeDelta = toSvgDelta(event.rect.width, event.rect.height, element);
               const originalSize = {
-                width: toNumber(element.getAttribute('width'), element.getBBox().width),
-                height: toNumber(element.getAttribute('height'), element.getBBox().height),
                 strokeWidth: toNumber(element.getAttribute('stroke-width'), 0),
                 rx: toNumber(element.getAttribute('rx'), 0),
+                ry: toNumber(element.getAttribute('ry'), 0),
               };
               applyResize(deltaTopLeft.dx, deltaTopLeft.dy, sizeDelta.dx, sizeDelta.dy, element, originalSize);
             },
@@ -360,6 +362,16 @@ export default function SvgCanvas({
             }}
           />
         </Box>
+        <MultiSelectControl
+          selectedCount={selectedElements.length}
+          onAlign={(alignment) => onAlign?.(alignment)}
+          onDistribute={(direction) => {
+            console.log('Distributing', direction);
+          }}
+          onDelete={() => {
+            console.log('Deleting selected items');
+          }}
+        />
       </Paper>
     </Box>
   );
