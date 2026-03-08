@@ -6,48 +6,46 @@ interface SvgCanvasProps {
   svgCode: string;
   onCanvasClick: (e: React.MouseEvent) => void;
   onElementTransform: (element: SVGElement, updates: Record<string, string>) => void;
-  selectedElement?: SVGElement | null;
+  selectedElements: SVGElement[];
 }
 
 export default function SvgCanvas({
   svgCode,
   onCanvasClick,
   onElementTransform,
-  selectedElement,
+  selectedElements,
 }: SvgCanvasProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
 
-  const selectionSignature = useMemo(() => {
-    if (!selectedElement) {
-      return null;
-    }
+  const selectionSignatures = useMemo(() => {
+    return selectedElements.map(element => {
+      const tagName = element.tagName.toLowerCase();
+      const ownerSvg = element.closest('svg');
+      let index = -1;
+      if (ownerSvg) {
+        const all = Array.from(ownerSvg.querySelectorAll(tagName));
+        index = all.indexOf(element);
+      }
 
-    const tagName = selectedElement.tagName.toLowerCase();
-    const ownerSvg = selectedElement.closest('svg');
-    let index = -1;
-    if (ownerSvg) {
-      const all = Array.from(ownerSvg.querySelectorAll(tagName));
-      index = all.indexOf(selectedElement);
-    }
-
-    return {
-      tagName,
-      index,
-      id: selectedElement.getAttribute('id'),
-      className: selectedElement.getAttribute('class'),
-      transform: selectedElement.getAttribute('transform'),
-      x: selectedElement.getAttribute('x'),
-      y: selectedElement.getAttribute('y'),
-      cx: selectedElement.getAttribute('cx'),
-      cy: selectedElement.getAttribute('cy'),
-      d: selectedElement.getAttribute('d'),
-      vectorEffect: selectedElement.getAttribute('vector-effect'),
-    };
-  }, [selectedElement]);
+      return {
+        tagName,
+        index,
+        id: element.getAttribute('id'),
+        className: element.getAttribute('class'),
+        transform: element.getAttribute('transform'),
+        x: element.getAttribute('x'),
+        y: element.getAttribute('y'),
+        cx: element.getAttribute('cx'),
+        cy: element.getAttribute('cy'),
+        d: element.getAttribute('d'),
+        vectorEffect: element.getAttribute('vector-effect'),
+      };
+    });
+  }, [selectedElements]);
 
   useEffect(() => {
     const container = canvasRef.current;
-    if (!container || !selectionSignature) {
+    if (!container || selectionSignatures.length === 0) {
       return;
     }
 
@@ -56,37 +54,40 @@ export default function SvgCanvas({
       return;
     }
 
-    const candidates = Array.from(
-      svgRoot.querySelectorAll(selectionSignature.tagName)
-    ) as SVGElement[];
+    const activeElements = selectionSignatures.map(sig => {
+      const candidates = Array.from(
+        svgRoot.querySelectorAll(sig.tagName)
+      ) as SVGElement[];
 
-    let activeElement: SVGElement | undefined;
-
-    if (selectionSignature.index !== -1 && candidates[selectionSignature.index]) {
-      activeElement = candidates[selectionSignature.index];
-    } else {
-      activeElement = candidates.find((candidate) => {
-        const idMatches = !selectionSignature.id || candidate.getAttribute('id') === selectionSignature.id;
-        const classMatches = !selectionSignature.className || candidate.getAttribute('class') === selectionSignature.className;
-        const transformMatches = !selectionSignature.transform || candidate.getAttribute('transform') === selectionSignature.transform;
+      if (sig.index !== -1 && candidates[sig.index]) {
+        return candidates[sig.index];
+      }
+      
+      return candidates.find((candidate) => {
+        const idMatches = !sig.id || candidate.getAttribute('id') === sig.id;
+        const classMatches = !sig.className || candidate.getAttribute('class') === sig.className;
+        const transformMatches = !sig.transform || candidate.getAttribute('transform') === sig.transform;
         const xyMatches =
-          (!selectionSignature.x || candidate.getAttribute('x') === selectionSignature.x)
-          && (!selectionSignature.y || candidate.getAttribute('y') === selectionSignature.y);
+          (!sig.x || candidate.getAttribute('x') === sig.x)
+          && (!sig.y || candidate.getAttribute('y') === sig.y);
         const cxyMatches =
-          (!selectionSignature.cx || candidate.getAttribute('cx') === selectionSignature.cx)
-          && (!selectionSignature.cy || candidate.getAttribute('cy') === selectionSignature.cy);
-        const pathMatches = !selectionSignature.d || candidate.getAttribute('d') === selectionSignature.d;
+          (!sig.cx || candidate.getAttribute('cx') === sig.cx)
+          && (!sig.cy || candidate.getAttribute('cy') === sig.cy);
+        const pathMatches = !sig.d || candidate.getAttribute('d') === sig.d;
 
         return idMatches && classMatches && transformMatches && xyMatches && cxyMatches && pathMatches;
       });
-    }
+    }).filter((el): el is SVGElement => !!el);
 
-    if (!activeElement) {
+    if (activeElements.length === 0) {
       return;
     }
 
-    const toSvgDelta = (dx: number, dy: number) => {
-      const ownerSvg = activeElement.ownerSVGElement;
+    // Use the first selected element as the anchor for coordinate transformations
+    const anchorElement = activeElements[0];
+
+    const toSvgDelta = (dx: number, dy: number, element: SVGElement = anchorElement) => {
+      const ownerSvg = element.ownerSVGElement;
       const matrix = ownerSvg?.getScreenCTM();
 
       if (!ownerSvg || !matrix) {
@@ -132,178 +133,184 @@ export default function SvgCanvas({
       };
     };
 
-    const setOutline = () => {
-      activeElement.setAttribute('vector-effect', 'non-scaling-stroke');
-      activeElement.style.outline = '2px dashed #1976d2';
-      activeElement.style.outlineOffset = '2px';
-    };
-
-    const clearOutline = () => {
-      if (activeElement.getAttribute('vector-effect') === 'non-scaling-stroke') {
-        const signatureVE = selectionSignature?.vectorEffect;
-        if (signatureVE) {
-          activeElement.setAttribute('vector-effect', signatureVE);
-        } else {
-          activeElement.removeAttribute('vector-effect');
-        }
-      }
-      activeElement.style.outline = '';
-      activeElement.style.outlineOffset = '';
-    };
-
-    const pendingUpdates: Record<string, string> = {};
-
-    const commitPending = () => {
-      if (Object.keys(pendingUpdates).length === 0) {
-        return;
-      }
-
-      onElementTransform(activeElement, { ...pendingUpdates });
-      Object.keys(pendingUpdates).forEach((key) => {
-        delete pendingUpdates[key];
+    const setOutlines = () => {
+      activeElements.forEach(activeElement => {
+        activeElement.setAttribute('vector-effect', 'non-scaling-stroke');
+        activeElement.style.outline = '2px dashed #1976d2';
+        activeElement.style.outlineOffset = '2px';
       });
     };
 
-    const applyMove = (dx: number, dy: number) => {
-      const tag = activeElement.tagName.toLowerCase();
+    const clearOutlines = () => {
+      activeElements.forEach((activeElement, i) => {
+        if (activeElement.getAttribute('vector-effect') === 'non-scaling-stroke') {
+          const signatureVE = selectionSignatures[i]?.vectorEffect;
+          if (signatureVE) {
+            activeElement.setAttribute('vector-effect', signatureVE);
+          } else {
+            activeElement.removeAttribute('vector-effect');
+          }
+        }
+        activeElement.style.outline = '';
+        activeElement.style.outlineOffset = '';
+      });
+    };
+
+    const pendingUpdates = new Map<SVGElement, Record<string, string>>();
+
+    const commitPending = () => {
+      if (pendingUpdates.size === 0) {
+        return;
+      }
+
+      pendingUpdates.forEach((updates, element) => {
+        onElementTransform(element, { ...updates });
+      });
+      pendingUpdates.clear();
+    };
+
+    const applyMove = (dx: number, dy: number, element: SVGElement) => {
+      const tag = element.tagName.toLowerCase();
+      const updates = pendingUpdates.get(element) || {};
 
       if (tag === 'line') {
         const next = {
-          x1: toNumber(activeElement.getAttribute('x1')) + dx,
-          y1: toNumber(activeElement.getAttribute('y1')) + dy,
-          x2: toNumber(activeElement.getAttribute('x2')) + dx,
-          y2: toNumber(activeElement.getAttribute('y2')) + dy,
+          x1: toNumber(element.getAttribute('x1')) + dx,
+          y1: toNumber(element.getAttribute('y1')) + dy,
+          x2: toNumber(element.getAttribute('x2')) + dx,
+          y2: toNumber(element.getAttribute('y2')) + dy,
         };
 
         Object.entries(next).forEach(([key, value]) => {
           const formatted = formatNumber(value);
-          activeElement.setAttribute(key, formatted);
-          pendingUpdates[key] = formatted;
+          element.setAttribute(key, formatted);
+          updates[key] = formatted;
         });
-
+        pendingUpdates.set(element, updates);
         return;
       }
 
       if (tag === 'circle' || tag === 'ellipse') {
         const next = {
-          cx: toNumber(activeElement.getAttribute('cx')) + dx,
-          cy: toNumber(activeElement.getAttribute('cy')) + dy,
+          cx: toNumber(element.getAttribute('cx')) + dx,
+          cy: toNumber(element.getAttribute('cy')) + dy,
         };
 
         Object.entries(next).forEach(([key, value]) => {
           const formatted = formatNumber(value);
-          activeElement.setAttribute(key, formatted);
-          pendingUpdates[key] = formatted;
+          element.setAttribute(key, formatted);
+          updates[key] = formatted;
         });
-
+        pendingUpdates.set(element, updates);
         return;
       }
 
-      const hasXY = activeElement.hasAttribute('x') && activeElement.hasAttribute('y');
+      const hasXY = element.hasAttribute('x') && element.hasAttribute('y');
       if (hasXY) {
         const next = {
-          x: toNumber(activeElement.getAttribute('x')) + dx,
-          y: toNumber(activeElement.getAttribute('y')) + dy,
+          x: toNumber(element.getAttribute('x')) + dx,
+          y: toNumber(element.getAttribute('y')) + dy,
         };
 
         Object.entries(next).forEach(([key, value]) => {
           const formatted = formatNumber(value);
-          activeElement.setAttribute(key, formatted);
-          pendingUpdates[key] = formatted;
+          element.setAttribute(key, formatted);
+          updates[key] = formatted;
         });
-
+        pendingUpdates.set(element, updates);
         return;
       }
 
-      const currentTransform = activeElement.getAttribute('transform');
+      const currentTransform = element.getAttribute('transform');
       const { tx, ty } = parseTranslate(currentTransform);
       const nextTransform = `translate(${formatNumber(tx + dx)}, ${formatNumber(ty + dy)})`;
-      activeElement.setAttribute('transform', nextTransform);
-      pendingUpdates.transform = nextTransform;
+      element.setAttribute('transform', nextTransform);
+      updates.transform = nextTransform;
+      pendingUpdates.set(element, updates);
     };
 
-    const canResizeTag = ['rect', 'image', 'foreignobject'].includes(
-      activeElement.tagName.toLowerCase()
+    const canResizeTag = (element: SVGElement) => ['rect', 'image', 'foreignobject'].includes(
+      element.tagName.toLowerCase()
     );
 
-    const applyResize = (deltaLeft: number, deltaTop: number, width: number, height: number, originalSize: { width: number; height: number; strokeWidth: number; rx: number; ry: number }) => {
-      const tag = activeElement.tagName.toLowerCase();
+    const applyResize = (deltaLeft: number, deltaTop: number, width: number, height: number, element: SVGElement, originalSize: { width: number; height: number; strokeWidth: number; rx: number; ry: number }) => {
+      const tag = element.tagName.toLowerCase();
       const supportsWH = ['rect', 'image', 'foreignobject'].includes(tag);
       if (!supportsWH) {
         return;
       }
 
+      const updates = pendingUpdates.get(element) || {};
       const widthValue = formatNumber(Math.max(1, width));
       const heightValue = formatNumber(Math.max(1, height));
 
-      activeElement.setAttribute('width', widthValue);
-      activeElement.setAttribute('height', heightValue);
-      activeElement.setAttribute('stroke-width', formatNumber(originalSize.strokeWidth));
-      activeElement.setAttribute('rx', formatNumber(originalSize.rx));
-      // activeElement.setAttribute('ry', formatNumber(originalSize.ry));
-      pendingUpdates.width = widthValue;
-      pendingUpdates.height = heightValue;
-      pendingUpdates['stroke-width'] = formatNumber(originalSize.strokeWidth);
-      pendingUpdates.rx = formatNumber(originalSize.rx);
-      // pendingUpdates.ry = formatNumber(originalSize.ry);
+      element.setAttribute('width', widthValue);
+      element.setAttribute('height', heightValue);
+      element.setAttribute('stroke-width', formatNumber(originalSize.strokeWidth));
+      element.setAttribute('rx', formatNumber(originalSize.rx));
+      updates.width = widthValue;
+      updates.height = heightValue;
+      updates['stroke-width'] = formatNumber(originalSize.strokeWidth);
+      updates.rx = formatNumber(originalSize.rx);
 
-      const needsPositionUpdate = deltaLeft !== 0 || deltaTop !== 0 || activeElement.hasAttribute('x') || activeElement.hasAttribute('y');
+      const needsPositionUpdate = deltaLeft !== 0 || deltaTop !== 0 || element.hasAttribute('x') || element.hasAttribute('y');
       if (needsPositionUpdate) {
-        const nextX = formatNumber(toNumber(activeElement.getAttribute('x')) + deltaLeft);
-        const nextY = formatNumber(toNumber(activeElement.getAttribute('y')) + deltaTop);
-        activeElement.setAttribute('x', nextX);
-        activeElement.setAttribute('y', nextY);
-        pendingUpdates.x = nextX;
-        pendingUpdates.y = nextY;
+        const nextX = formatNumber(toNumber(element.getAttribute('x')) + deltaLeft);
+        const nextY = formatNumber(toNumber(element.getAttribute('y')) + deltaTop);
+        element.setAttribute('x', nextX);
+        element.setAttribute('y', nextY);
+        updates.x = nextX;
+        updates.y = nextY;
       }
+      pendingUpdates.set(element, updates);
     };
-    const interactable = interact(activeElement);
 
-    setOutline();
+    setOutlines();
 
-    interactable.draggable({
-      listeners: {
-        move(event) {
-          const delta = toSvgDelta(event.dx, event.dy);
-          applyMove(delta.dx, delta.dy);
-        },
-        end() {
-          commitPending();
-        },
-      },
-    });
+    const interactables = activeElements.map(element => {
+      const interactable = interact(element);
 
-    if (canResizeTag) {
-      interactable.resizable({
-        edges: { left: true, right: true, bottom: true, top: true },
+      interactable.draggable({
         listeners: {
           move(event) {
-            const deltaTopLeft = toSvgDelta(event.deltaRect.left, event.deltaRect.top);
-            const sizeDelta = toSvgDelta(event.rect.width, event.rect.height);
-            // Get all original attributes needed 
-            // for resizing before applying any changes 
-            // to ensure consistent calculations:
-            const originalSize = {
-              width: toNumber(activeElement.getAttribute('width'), activeElement.getBBox().width),
-              height: toNumber(activeElement.getAttribute('height'), activeElement.getBBox().height),
-              strokeWidth: toNumber(activeElement.getAttribute('stroke-width'), 0),
-              rx: toNumber(activeElement.getAttribute('rx'), 0),
-              // ry: toNumber(activeElement.getAttribute('ry'), 0),
-            };
-            applyResize(deltaTopLeft.dx, deltaTopLeft.dy, sizeDelta.dx, sizeDelta.dy, originalSize);
+            const delta = toSvgDelta(event.dx, event.dy, element);
+            applyMove(delta.dx, delta.dy, element);
           },
           end() {
             commitPending();
           },
         },
       });
-    }
+
+      if (canResizeTag(element)) {
+        interactable.resizable({
+          edges: { left: true, right: true, bottom: true, top: true },
+          listeners: {
+            move(event) {
+              const deltaTopLeft = toSvgDelta(event.deltaRect.left, event.deltaRect.top, element);
+              const sizeDelta = toSvgDelta(event.rect.width, event.rect.height, element);
+              const originalSize = {
+                width: toNumber(element.getAttribute('width'), element.getBBox().width),
+                height: toNumber(element.getAttribute('height'), element.getBBox().height),
+                strokeWidth: toNumber(element.getAttribute('stroke-width'), 0),
+                rx: toNumber(element.getAttribute('rx'), 0),
+              };
+              applyResize(deltaTopLeft.dx, deltaTopLeft.dy, sizeDelta.dx, sizeDelta.dy, element, originalSize);
+            },
+            end() {
+              commitPending();
+            },
+          },
+        });
+      }
+      return interactable;
+    });
 
     return () => {
-      clearOutline();
-      interactable.unset();
+      clearOutlines();
+      interactables.forEach(i => i.unset());
     };
-  }, [onElementTransform, selectionSignature, svgCode]);
+  }, [onElementTransform, selectionSignatures, svgCode]);
 
   return (
     <Box sx={{ height: '100%', p: 1 }}>

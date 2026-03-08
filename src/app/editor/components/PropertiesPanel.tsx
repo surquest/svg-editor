@@ -10,11 +10,13 @@ import {
   InputAdornment,
   Menu
 } from '@mui/material';
-import { X as CloseIcon, Palette } from 'lucide-react';
+import { Palette } from '@mui/icons-material';
+import { Close as CloseIcon } from '@mui/icons-material';
 import { HexColorPicker } from 'react-colorful';
+import { Chip } from '@mui/material';
 
 interface PropertiesPanelProps {
-  selectedElement: SVGElement | null;
+  selectedElements: SVGElement[];
   attributes: { name: string, value: string }[];
   textContent: string;
   onAttributeChange: (name: string, value: string) => void;
@@ -23,23 +25,24 @@ interface PropertiesPanelProps {
 }
 
 export default function PropertiesPanel({
-  selectedElement,
+  selectedElements,
   attributes,
   textContent,
   onAttributeChange,
   onTextContentChange,
   onClose
 }: PropertiesPanelProps) {
+  const selectedElement = selectedElements[selectedElements.length - 1] || null;
   const [colorPickerAnchor, setColorPickerAnchor] = useState<{ [key: string]: HTMLElement | null }>({});
 
   return (
     <Drawer
       anchor="right"
-      open={!!selectedElement}
+      open={selectedElements.length > 0}
       onClose={onClose}
       variant="persistent"
       sx={{
-        width: selectedElement ? 320 : 0,
+        width: selectedElements.length > 0 ? 320 : 0,
         flexShrink: 0,
         '& .MuiDrawer-paper': {
           width: 320,
@@ -52,13 +55,29 @@ export default function PropertiesPanel({
     >
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
         <Typography variant="h6" sx={{ flexGrow: 1 }}>
-          Properties: {selectedElement?.tagName}
+          Properties: {selectedElements.length > 1 ? `${selectedElements.length} elements` : selectedElement?.tagName}
         </Typography>
         <IconButton onClick={onClose} size="small">
           <CloseIcon size={20} />
         </IconButton>
       </Box>
       <Divider sx={{ mb: 2 }} />
+      {selectedElements.length > 1 && (
+        <Box sx={{ mb: 2 }}>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            {selectedElements.map((el, i) => (
+              <Chip 
+                key={i} 
+                label={el.tagName.toLowerCase()} 
+                size="small" 
+                variant={el === selectedElement ? "filled" : "outlined"}
+                color={el === selectedElement ? "primary" : "default"}
+              />
+            ))}
+          </Stack>
+          <Divider sx={{ mt: 2 }} />
+        </Box>
+      )}
       <Stack spacing={3}>
         {selectedElement?.tagName.toLowerCase() === 'text' && (
           <Box>

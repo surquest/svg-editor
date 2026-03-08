@@ -1,7 +1,7 @@
 import React from 'react';
 import { AppBar, Toolbar, IconButton, Typography } from '@mui/material';
 import Link from 'next/link';
-import { Home as HomeIcon } from 'lucide-react';
+import HomeIcon from '@mui/icons-material/Home';
 
 export default function EditorHeader() {
   return (

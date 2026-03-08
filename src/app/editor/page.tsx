@@ -16,9 +16,11 @@ import { OnMount } from '@monaco-editor/react';
 export default function EditorPage() {
   const [svgCode, setSvgCode] = useState('');
   const [editor, setEditor] = useState<any>(null);
-  const [selectedElement, setSelectedElement] = useState<SVGElement | null>(null);
+  const [selectedElements, setSelectedElements] = useState<SVGElement[]>([]);
   const [attributes, setAttributes] = useState<{ name: string, value: string }[]>([]);
   const [textContent, setTextContent] = useState<string>('');
+
+  const selectedElement = selectedElements[0] || null;
 
   const handleEditorMount: OnMount = (editor) => {
     setEditor(editor);
@@ -109,7 +111,7 @@ export default function EditorPage() {
         return next;
       });
 
-      setSelectedElement(targetElement);
+      setSelectedElements(prev => [...prev.filter(el => el !== targetElement), targetElement]);
     }
   };
 
@@ -258,23 +260,37 @@ export default function EditorPage() {
     const clicked = e.target as SVGElement;
 
     if (!clicked || !(clicked instanceof SVGElement) || clicked.tagName.toLowerCase() === 'svg') {
-      setSelectedElement(null);
+      setSelectedElements([]);
       return;
     }
 
-    // Select child shape by default. Use Ctrl+Click to select the nearest parent <g>.
+    // Select child shape by default. Use Shift+Click to select the nearest parent <g>.
     const parentGroup = clicked.closest('g');
     const shouldSelectGroup = e.ctrlKey && parentGroup instanceof SVGElement;
-    const target = shouldSelectGroup ? (parentGroup as SVGElement) : clicked;
+    const target = (shouldSelectGroup ? (parentGroup as SVGElement) : clicked) as SVGElement;
+
+    if (e.shiftKey) {
+      // Toggle selection with Shift key
+      setSelectedElements(prev => {
+        const isSelected = prev.includes(target);
+        if (isSelected) {
+          return prev.filter(el => el !== target);
+        } else {
+          return [...prev, target];
+        }
+      });
+    } else {
+      // Normal selection
+      setSelectedElements([target]);
+    }
 
     if (target.tagName.toLowerCase() === 'text') {
       setTextContent(target.textContent || '');
     } else {
       setTextContent('');
     }
-    setSelectedElement(target);
 
-    // Extract attributes for editing
+    // Extract attributes for editing - show attributes of the last selected (primary) element
     const attrList: { name: string, value: string }[] = [];
     for (let i = 0; i < target.attributes.length; i++) {
       const attr = target.attributes[i];
@@ -366,7 +382,7 @@ export default function EditorPage() {
               svgCode={svgCode}
               onCanvasClick={handleCanvasClick}
               onElementTransform={handleElementTransform}
-              selectedElement={selectedElement}
+              selectedElements={selectedElements}
             />
           </Panel>
 
@@ -381,12 +397,12 @@ export default function EditorPage() {
         </PanelGroup>
 
         <PropertiesPanel
-          selectedElement={selectedElement}
+          selectedElements={selectedElements}
           attributes={attributes}
           textContent={textContent}
           onAttributeChange={updateAttribute}
           onTextContentChange={updateTextContent}
-          onClose={() => setSelectedElement(null)}
+          onClose={() => setSelectedElements([])}
         />
       </Box>
     </Box>
