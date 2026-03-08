@@ -1,7 +1,5 @@
 import { SvgDocument, SvgElement, SvgElementType, SvgGeometry, SvgStyle, SvgTransform } from '@/types';
-
-let idCounter = 0;
-const generateId = () => `el-${++idCounter}-${Math.random().toString(36).slice(2, 7)}`;
+import { generateId } from '@/lib/utils/generateId';
 
 function parseStyle(el: Element): SvgStyle {
   return {

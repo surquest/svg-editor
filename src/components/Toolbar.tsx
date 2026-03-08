@@ -38,6 +38,7 @@ import {
 import { useStore } from '@/store/useStore';
 import { alignElements, distributeElements } from '@/lib/svg/alignSvg';
 import { serializeSvg } from '@/lib/svg/serializeSvg';
+import { generateId } from '@/lib/utils/generateId';
 
 export function Toolbar() {
   const {
@@ -96,7 +97,7 @@ export function Toolbar() {
     const selected = document.elements.filter(el => selectedIds.includes(el.id));
     const duplicates = selected.map(el => ({
       ...el,
-      id: `${el.id}-copy-${Date.now()}`,
+      id: generateId('copy'),
       geometry: {
         ...el.geometry,
         x: (el.geometry.x || 0) + 20,

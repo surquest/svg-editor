@@ -5,6 +5,7 @@ import { Stage, Layer, Rect, Circle, Ellipse, Line, Text, Transformer } from 're
 import Konva from 'konva';
 import { useStore } from '@/store/useStore';
 import { SvgElement } from '@/types';
+import { generateId } from '@/lib/utils/generateId';
 
 interface KonvaCanvasProps {
   width: number;
@@ -243,7 +244,7 @@ export default function KonvaCanvas({ width, height }: KonvaCanvasProps) {
     const pos = getStagePos();
     drawStart.current = pos;
 
-    const id = `el-${Date.now()}`;
+    const id = generateId(tool);
     tempElementId.current = id;
 
     const baseStyle = { fill: '#4488ff', stroke: '#2266cc', strokeWidth: 2, opacity: 1 };

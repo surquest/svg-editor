@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { useStore } from '@/store/useStore';
+import { generateId } from '@/lib/utils/generateId';
 
 export function KeyboardHandler() {
   const { undo, redo, removeElements, selectedIds, document, addElement } = useStore();
@@ -35,7 +36,7 @@ export function KeyboardHandler() {
         selected.forEach(el => {
           addElement({
             ...el,
-            id: `${el.id}-copy-${Date.now()}`,
+            id: generateId('copy'),
             geometry: {
               ...el.geometry,
               x: (el.geometry.x || 0) + 20,
