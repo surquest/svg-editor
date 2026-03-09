@@ -355,6 +355,10 @@
 </svg>`;
 
       codeEl.value = defaultSVG;
+      codeEl.addEventListener('input', () => {
+        clearTimeout(typeTimeout);
+        typeTimeout = setTimeout(updateDOMFromCode, 300);
+      });
 
       // -- Sidebar Controls --
       function openSidebar() {
