@@ -620,9 +620,33 @@
         if (!errorNode) {
           renderTarget.innerHTML = '';
           const svg = doc.documentElement;
-          // Ensure it stretches to fill the container but respects its viewBox
-          if (!svg.getAttribute('width')) svg.setAttribute('width', '100%');
-          if (!svg.getAttribute('height')) svg.setAttribute('height', '100%');
+
+          // MATCH CONTAINER SIZE TO VIEWBOX
+          const viewBoxAttr = svg.getAttribute('viewBox');
+          if (viewBoxAttr) {
+            const vb = viewBoxAttr.split(/[\s,]+/).map(parseFloat);
+            if (vb.length === 4) {
+              const vbWidth = vb[2];
+              const vbHeight = vb[3];
+              if (!isNaN(vbWidth) && !isNaN(vbHeight)) {
+                canvasContainer.style.width = `${vbWidth}px`;
+                canvasContainer.style.height = `${vbHeight}px`;
+              }
+            }
+          } else {
+            // Fallback to width/height attributes if viewBox is missing
+            const wAttr = parseFloat(svg.getAttribute('width'));
+            const hAttr = parseFloat(svg.getAttribute('height'));
+            if (!isNaN(wAttr) && !isNaN(hAttr)) {
+              canvasContainer.style.width = `${wAttr}px`;
+              canvasContainer.style.height = `${hAttr}px`;
+            }
+          }
+
+          // Ensure it stretches to fill the now-perfectly-sized container
+          svg.setAttribute('width', '100%');
+          svg.setAttribute('height', '100%');
+          
           renderTarget.appendChild(svg);
           selectedElements = []; // Reset selection on manual code edit to prevent stale refs
           updateSelectionOverlay();
