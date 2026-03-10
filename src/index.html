@@ -107,6 +107,12 @@
         </button>
       </div>
 
+      <!-- Auto Connect Switcher -->
+      <label class="flex items-center space-x-1 cursor-pointer bg-white border border-gray-300 rounded-md shadow-sm ml-2 px-2 py-1.5" title="Auto-connect lines to shapes">
+        <input type="checkbox" id="toggle-autoconnect" checked class="cursor-pointer">
+        <span class="text-sm font-medium text-gray-700">Auto-connect</span>
+      </label>
+
       <!-- Export Button Group -->
       <div class="flex items-center bg-white border border-gray-300 rounded-md shadow-sm ml-2">
         <button id="btn-copy" class="p-1.5 hover:bg-gray-50 border-r border-gray-200 text-gray-600 transition-colors" title="Copy Selected (SVG / Text / HTML)">
@@ -329,6 +335,12 @@
         const parser = new DOMParser();
         const doc = parser.parseFromString(codeEl.value, "image/svg+xml");
         if (!doc.querySelector('parsererror')) {
+          const oldSvg = getRootSVG();
+          const currentIndices = selectedElements.map(el => {
+              if (!oldSvg) return -1;
+              return Array.from(oldSvg.querySelectorAll('*')).indexOf(el);
+          });
+
           renderTarget.innerHTML = '';
           const svg = doc.documentElement;
           const vbAttr = svg.getAttribute('viewBox');
@@ -338,7 +350,16 @@
           }
           svg.setAttribute('width', '100%'); svg.setAttribute('height', '100%');
           renderTarget.appendChild(svg);
-          selectedElements = []; 
+          
+          if (updateAllConnectedLines()) {
+             // Avoid recursion: just update code locally without pushing undo
+             const newSVGStr = cleanAndFormatSVG(getRootSVG());
+             codeEl.value = newSVGStr;
+          }
+          
+          const newChildren = Array.from(svg.querySelectorAll('*'));
+          selectedElements = currentIndices.map(idx => idx !== -1 ? newChildren[idx] : null).filter(Boolean);
+          
           updateSelectionOverlay(); 
           flashSyncIndicator();
         }
@@ -348,16 +369,21 @@
       // -- Sidebar and Logic Initialization --
 
       const defaultSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 500" width="100%" height="100%">
-  <rect x="150" y="100" width="120" height="120" fill="#4f46e5" rx="8" ry="8" />
-  <circle cx="350" cy="160" r="60" fill="#ec4899" />
+  <rect id="shape1" x="150" y="100" width="120" height="120" fill="#4f46e5" rx="8" ry="8" />
+  <circle id="shape2" cx="350" cy="160" r="60" fill="#ec4899" />
+  <line data-connections="shape1,shape2" x1="210" y1="160" x2="350" y2="160" stroke="#10b981" stroke-width="4" />
   <polygon points="250,280 180,400 320,400" fill="#10b981" />
   <text x="50" y="50" font-family="sans-serif" font-size="24" fill="#333">SVG Studio</text>
+  <polyline points="400,300 450,350 400,400" fill="none" stroke="#f59e0b" stroke-width="4" />
 </svg>`;
 
       codeEl.value = defaultSVG;
+
       codeEl.addEventListener('input', () => {
-        clearTimeout(typeTimeout);
-        typeTimeout = setTimeout(updateDOMFromCode, 300);
+          clearTimeout(typeTimeout);
+          typeTimeout = setTimeout(() => {
+              updateDOMFromCode();
+          }, 500);
       });
 
       // -- Sidebar Controls --
@@ -524,12 +550,13 @@
           if (!isMulti) {
               header.textContent = "Shape Properties";
               const tag = firstEl.tagName.toLowerCase();
+              attrs.push('id');
               if (tag === 'rect') attrs.push('x', 'y', 'width', 'height', 'rx', 'ry');
               else if (tag === 'circle') attrs.push('cx', 'cy', 'r');
               else if (tag === 'ellipse') attrs.push('cx', 'cy', 'rx', 'ry');
-              else if (tag === 'line') attrs.push('x1', 'y1', 'x2', 'y2');
+              else if (tag === 'line') attrs.push('x1', 'y1', 'x2', 'y2', 'data-connections');
               else if (tag === 'text') { attrs.push('x', 'y', 'font-size', 'font-family'); showTextContent = true; }
-              else if (tag === 'polygon' || tag === 'polyline') attrs.push('points');
+              else if (tag === 'polygon' || tag === 'polyline') attrs.push('points', 'data-connections');
               else if (tag === 'path') attrs.push('d');
               attrs.push('fill', 'stroke', 'stroke-width', 'opacity', 'transform');
           } else {
@@ -570,6 +597,7 @@
                   if (attr === 'text-content' && !isMulti) target.textContent = val;
                   else if (attr !== 'text-content') val === '' ? target.removeAttribute(attr) : target.setAttribute(attr, val);
               });
+              updateAllConnectedLines();
               updateSelectionOverlay(); updateCodeFromDOM();
           };
 
@@ -634,6 +662,175 @@
         const p1 = pt1.matrixTransform(matrix), p2 = pt2.matrixTransform(matrix);
         return { x: Math.min(p1.x, p2.x), y: Math.min(p1.y, p2.y), width: Math.abs(p2.x - p1.x), height: Math.abs(p2.y - p1.y) };
       }
+      
+      function getShapeEdgePoint(el, tgtX, tgtY) {
+        const bbox = getSVGBBox(el);
+        const cx = bbox.x + bbox.width / 2, cy = bbox.y + bbox.height / 2;
+        const dx = tgtX - cx, dy = tgtY - cy;
+        if (dx === 0 && dy === 0) return { x: cx, y: cy };
+        
+        const tag = el.tagName.toLowerCase();
+        
+        if (tag === 'circle' || tag === 'ellipse') {
+            const rx = tag === 'circle' ? parseFloat(el.getAttribute('r')||0) : parseFloat(el.getAttribute('rx')||0);
+            const ry = tag === 'circle' ? parseFloat(el.getAttribute('r')||0) : parseFloat(el.getAttribute('ry')||0);
+            
+            // For circle/ellipse, finding intersection with ray from center
+            const angle = Math.atan2(dy, dx);
+            // Transform matrix handles scale/translate
+            const matrix = el.getScreenCTM();
+            const svgMatrix = getRootSVG().getScreenCTM().inverse();
+            const combinedMatrix = matrix.multiply(svgMatrix);
+            
+            // Simpler approximation using bounding box ellipse for transformed shapes
+            const hw = bbox.width / 2, hh = bbox.height / 2;
+            const t = 1 / Math.sqrt(Math.pow(dx / hw, 2) + Math.pow(dy / hh, 2));
+            return { x: +(cx + dx * t).toFixed(1), y: +(cy + dy * t).toFixed(1) };
+            
+        } else if (tag === 'polygon' || tag === 'polyline' || tag === 'line') {
+            // Ray casting intersecting with line segments
+            let points = [];
+            if (tag === 'line') {
+               const p1 = {x: parseFloat(el.getAttribute('x1')||0), y: parseFloat(el.getAttribute('y1')||0)};
+               const p2 = {x: parseFloat(el.getAttribute('x2')||0), y: parseFloat(el.getAttribute('y2')||0)};
+               points = [p1, p2];
+            } else {
+               const pStr = el.getAttribute('points');
+               if (pStr) {
+                   const pts = pStr.trim().split(/[\s,]+/).filter(p => p);
+                   for (let i=0; i<pts.length; i+=2) {
+                       points.push({x: parseFloat(pts[i]), y: parseFloat(pts[i+1]||0)});
+                   }
+               }
+            }
+            
+            // Apply transform to points to get bounding space coordinates if needed, 
+            // but for simplicity we rely on the bounding box center to edge
+            let closestT = Infinity;
+            let edgePt = null;
+            
+            // Helper for line intersection
+            const lineIntersect = (x1, y1, x2, y2, x3, y3, x4, y4) => {
+                const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+                if (den === 0) return null;
+                const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
+                const u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / den;
+                if (t > 0 && t < 1 && u > 0 && u < 1) { // intersection is on segment
+                    return {x: x1 + t * (x2 - x1), y: y1 + t * (y2 - y1), t: t};
+                }
+                return null;
+            };
+            
+            // Transform matrix points to absolute space for intersection calculation
+            const svg = getRootSVG();
+            const matrix = el.getScreenCTM().multiply(svg.getScreenCTM().inverse());
+            
+            const trPoints = points.map(p => {
+               const pt = svg.createSVGPoint();
+               pt.x = p.x; pt.y = p.y;
+               return pt.matrixTransform(matrix);
+            });
+            
+            if (tag === 'polygon' && trPoints.length > 2) {
+                trPoints.push(trPoints[0]); // close polygon
+            }
+            
+            // Ray from cx,cy to far away in dx,dy direction
+            const rayX2 = cx + dx * 1000;
+            const rayY2 = cy + dy * 1000;
+            
+            for (let i=0; i<trPoints.length-1; i++) {
+                const p1 = trPoints[i], p2 = trPoints[i+1];
+                const pt = lineIntersect(cx, cy, rayX2, rayY2, p1.x, p1.y, p2.x, p2.y);
+                if (pt && pt.t < closestT) {
+                    closestT = pt.t;
+                    edgePt = {x: pt.x, y: pt.y};
+                }
+            }
+            
+            if (edgePt) {
+                return { x: +(edgePt.x).toFixed(1), y: +(edgePt.y).toFixed(1) };
+            }
+        }
+        
+        // Fallback to bounding box intersection (rect, text, etc)
+        const hw = bbox.width / 2, hh = bbox.height / 2;
+        const tx = dx === 0 ? Infinity : Math.abs(hw / dx);
+        const ty = dy === 0 ? Infinity : Math.abs(hh / dy);
+        const t = Math.min(tx, ty);
+        return { x: +(cx + dx * t).toFixed(1), y: +(cy + dy * t).toFixed(1) };
+      }
+
+      function updateConnectedLines(element) {
+        const id = element.getAttribute('id');
+        if (!id) return;
+        const svg = getRootSVG();
+        if (!svg) return;
+        updateAllConnectedLines();
+      }
+
+      function updateAllConnectedLines() {
+        const svg = getRootSVG();
+        if (!svg) return false;
+        let changed = false;
+        const lines = svg.querySelectorAll('[data-connections]');
+        lines.forEach(line => {
+            const tag = line.tagName.toLowerCase();
+            const conns = (line.getAttribute('data-connections') || '').split(',').map(s => s.trim());
+            
+            if (tag === 'line') {
+              const srcEl = conns[0] ? svg.querySelector(`[id="${conns[0]}"]`) : null;
+              const tgtEl = conns[1] ? svg.querySelector(`[id="${conns[1]}"]`) : null;
+              
+              const srcBBox = srcEl ? getSVGBBox(srcEl) : null;
+              const tgtBBox = tgtEl ? getSVGBBox(tgtEl) : null;
+              
+              const cx1 = srcBBox ? srcBBox.x + srcBBox.width/2 : parseFloat(line.getAttribute('x1')||0);
+              const cy1 = srcBBox ? srcBBox.y + srcBBox.height/2 : parseFloat(line.getAttribute('y1')||0);
+              const cx2 = tgtBBox ? tgtBBox.x + tgtBBox.width/2 : parseFloat(line.getAttribute('x2')||0);
+              const cy2 = tgtBBox ? tgtBBox.y + tgtBBox.height/2 : parseFloat(line.getAttribute('y2')||0);
+
+              if (srcEl) {
+                  const p = getShapeEdgePoint(srcEl, cx2, cy2);
+                  if (parseFloat(line.getAttribute('x1')) !== p.x || parseFloat(line.getAttribute('y1')) !== p.y) {
+                      line.setAttribute('x1', p.x); line.setAttribute('y1', p.y); changed = true;
+                  }
+              }
+              if (tgtEl) {
+                  const p = getShapeEdgePoint(tgtEl, cx1, cy1);
+                  if (parseFloat(line.getAttribute('x2')) !== p.x || parseFloat(line.getAttribute('y2')) !== p.y) {
+                      line.setAttribute('x2', p.x); line.setAttribute('y2', p.y); changed = true;
+                  }
+              }
+            } else if (tag === 'polyline' || tag === 'polygon') {
+              const pts = line.getAttribute('points').trim().split(/[\s,]+/).filter(p => p !== '');
+              let pChanged = false;
+              for (let i = 0; i < Math.min(conns.length, pts.length / 2); i++) {
+                if (conns[i]) {
+                  const targetEl = svg.querySelector(`[id="${conns[i]}"]`);
+                  if (targetEl && i * 2 + 1 < pts.length) {
+                    let adjIdx = i === 0 ? 1 : i - 1;
+                    if (adjIdx * 2 + 1 >= pts.length) adjIdx = 0;
+                    const adjX = parseFloat(pts[adjIdx * 2] || 0);
+                    const adjY = parseFloat(pts[adjIdx * 2 + 1] || 0);
+                    
+                    const p = getShapeEdgePoint(targetEl, adjX, adjY);
+                    if (parseFloat(pts[i * 2]) !== p.x || parseFloat(pts[i * 2 + 1]) !== p.y) {
+                      pts[i * 2] = p.x.toFixed(1);
+                      pts[i * 2 + 1] = p.y.toFixed(1);
+                      pChanged = true;
+                    }
+                  }
+                }
+              }
+              if (pChanged) {
+                line.setAttribute('points', pts.join(' '));
+                changed = true;
+              }
+            }
+        });
+        return changed;
+      }
 
       function updateSelectionOverlay() {
         updateToolbarState();
@@ -656,8 +853,11 @@
         selectionOverlay.style.height = `${(maxY - minY) + 8}px`;
         
         const isLine = selectedElements.length === 1 && selectedElements[0].tagName.toLowerCase() === 'line';
-        document.querySelectorAll('.standard-handle').forEach(h => h.style.display = isLine ? 'none' : 'block');
+        const isPathLike = selectedElements.length === 1 && ['polyline', 'polygon'].includes(selectedElements[0].tagName.toLowerCase());
+        
+        document.querySelectorAll('.standard-handle').forEach(h => h.style.display = (isLine || isPathLike) ? 'none' : 'block');
         document.querySelectorAll('.line-handle').forEach(h => h.style.display = isLine ? 'block' : 'none');
+        document.querySelectorAll('.poly-handle').forEach(h => h.remove());
         
         if (isLine) {
             selectionOverlay.classList.remove('border', 'border-indigo-500'); selectionOverlay.style.background = 'transparent';
@@ -671,6 +871,25 @@
             document.getElementById('handle-line-p1').style.top = `${sp1.y - containerRect.top - ovT}px`;
             document.getElementById('handle-line-p2').style.left = `${sp2.x - containerRect.left - ovL}px`;
             document.getElementById('handle-line-p2').style.top = `${sp2.y - containerRect.top - ovT}px`;
+        } else if (isPathLike) {
+            selectionOverlay.classList.remove('border', 'border-indigo-500'); selectionOverlay.style.background = 'transparent';
+            const pEl = selectedElements[0], matrix = pEl.getScreenCTM();
+            const ovL = parseFloat(selectionOverlay.style.left), ovT = parseFloat(selectionOverlay.style.top);
+            const pStr = pEl.getAttribute('points');
+            if (pStr) {
+                const pts = pStr.trim().split(/[\s,]+/).filter(p => p !== '');
+                for(let i=0; i<pts.length; i+=2) {
+                    const pt = getRootSVG().createSVGPoint();
+                    pt.x = parseFloat(pts[i]); pt.y = parseFloat(pts[i+1]||0);
+                    const spt = pt.matrixTransform(matrix);
+                    const handle = document.createElement('div');
+                    handle.className = 'absolute w-3 h-3 bg-white border border-indigo-500 rounded-full -translate-x-1.5 -translate-y-1.5 cursor-crosshair pointer-events-auto resize-handle poly-handle';
+                    handle.id = 'handle-poly-' + (i/2);
+                    handle.style.left = `${spt.x - containerRect.left - ovL}px`;
+                    handle.style.top = `${spt.y - containerRect.top - ovT}px`;
+                    selectionOverlay.appendChild(handle);
+                }
+            }
         } else {
             selectionOverlay.classList.add('border', 'border-indigo-500'); selectionOverlay.style.background = 'rgba(79, 70, 229, 0.05)';
         }
@@ -737,6 +956,7 @@
         if (e.target.classList.contains('resize-handle')) {
           resizeDir = e.target.id;
           if (resizeDir.startsWith('handle-line')) activeAction = 'resize-line';
+          else if (resizeDir.startsWith('handle-poly')) activeAction = 'resize-poly';
           else {
             activeAction = 'resize'; let mX = Infinity, mY = Infinity, MX = -Infinity, MY = -Infinity;
             selectedElements.forEach(el => { const b = getSVGBBox(el); mX = Math.min(mX, b.x); mY = Math.min(mY, b.y); MX = Math.max(MX, b.x + b.width); MY = Math.max(MY, b.y + b.height); });
@@ -774,7 +994,7 @@
       window.addEventListener('mousemove', (e) => {
         if (!activeAction) return;
         const cp = getSVGPoint(e.clientX, e.clientY), dx = cp.x - startPt?.x, dy = cp.y - startPt?.y;
-        if (activeAction === 'drag' && selectedElements.length > 0) selectedElements.forEach(el => applyDelta(el, origState.get(el), dx, dy));
+        if (activeAction === 'drag' && selectedElements.length > 0) selectedElements.forEach(el => { applyDelta(el, origState.get(el), dx, dy); updateConnectedLines(el); });
         else if (activeAction === 'marquee') {
           const r = canvasContainer.getBoundingClientRect(), minX = Math.min(marqueeStart.x, e.clientX), minY = Math.min(marqueeStart.y, e.clientY), maxX = Math.max(marqueeStart.x, e.clientX), maxY = Math.max(marqueeStart.y, e.clientY);
           const mb = document.getElementById('marquee-box');
@@ -783,12 +1003,22 @@
         } else if (activeAction === 'resize-line' && selectedElements.length > 0) {
           const line = selectedElements[0], lp = getLocalSVGPoint(e.clientX, e.clientY, line);
           resizeDir === 'handle-line-p1' ? (line.setAttribute('x1', lp.x), line.setAttribute('y1', lp.y)) : (line.setAttribute('x2', lp.x), line.setAttribute('y2', lp.y));
+        } else if (activeAction === 'resize-poly' && selectedElements.length > 0) {
+          const pEl = selectedElements[0], lp = getLocalSVGPoint(e.clientX, e.clientY, pEl);
+          const ptIdx = parseInt(resizeDir.split('-')[2]);
+          const pts = pEl.getAttribute('points').trim().split(/[\s,]+/).filter(p => p !== '');
+          if (ptIdx * 2 + 1 < pts.length) {
+            pts[ptIdx * 2] = lp.x.toFixed(1);
+            pts[ptIdx * 2 + 1] = lp.y.toFixed(1);
+            pEl.setAttribute('points', pts.join(' '));
+            updateConnectedLines(pEl);
+          }
         } else if (activeAction === 'resize') {
           const dir = resizeDir.split('-')[1]; let sx = 1, sy = 1;
           if (dir.includes('r')) sx = Math.max(0.1, (groupBBox.width + dx) / groupBBox.width); else if (dir.includes('l')) sx = Math.max(0.1, (groupBBox.width - dx) / groupBBox.width);
           if (dir.includes('b')) sy = Math.max(0.1, (groupBBox.height + dy) / groupBBox.height); else if (dir.includes('t')) sy = Math.max(0.1, (groupBBox.height - dy) / groupBBox.height);
           const ox = dir.includes('l') ? groupBBox.x + groupBBox.width : groupBBox.x, oy = dir.includes('t') ? groupBBox.y + groupBBox.height : groupBBox.y;
-          selectedElements.forEach(el => applyScale(el, origState.get(el), sx, sy, ox, oy));
+          selectedElements.forEach(el => { applyScale(el, origState.get(el), sx, sy, ox, oy); updateConnectedLines(el); });
         }
         if (activeAction !== 'marquee') updateSelectionOverlay();
       });
@@ -809,7 +1039,68 @@
               e.shiftKey ? ns.forEach(n => { if (!selectedElements.includes(n)) selectedElements.push(n); }) : selectedElements = ns;
               activeAction = null; updateSelectionOverlay();
           } else { activeAction = null; if (!e.shiftKey && selectedElements.length === 0) { backdropEl.innerHTML = ''; updateSelectionOverlay(); } }
-        } else if (activeAction) { activeAction = null; updateCodeFromDOM(); }
+        } else if (activeAction) {
+            if ((activeAction === 'resize-line' || activeAction === 'resize-poly') && selectedElements.length > 0) {
+              const line = selectedElements[0];
+              const prevDisplay = selectionOverlay.style.display;
+              const prevPointerEvents = line.style.pointerEvents;
+              selectionOverlay.style.display = 'none';
+              line.style.pointerEvents = 'none'; // Prevent hitting the line itself during drop detection
+              
+              let targetEl = document.elementFromPoint(e.clientX, e.clientY);
+              const isAutoConnect = document.getElementById('toggle-autoconnect').checked;
+              
+              line.style.pointerEvents = prevPointerEvents; // Restore immediately
+              
+              if (targetEl && targetEl.tagName && targetEl.tagName.toLowerCase() === 'tspan') targetEl = targetEl.closest('text') || targetEl;
+              
+              const svg = getRootSVG();
+              if (isAutoConnect && targetEl && targetEl !== line && svg && svg.contains(targetEl) && targetEl !== svg) {
+                let curr = targetEl; let highest = null;
+                while (curr && curr !== svg) { if (curr.tagName && curr.tagName.toLowerCase() === 'g') highest = curr; curr = curr.parentNode; }
+                if (highest) targetEl = highest;
+                
+                if (!targetEl.getAttribute('id')) targetEl.setAttribute('id', 'shape_' + Math.random().toString(36).substr(2, 6));
+                
+                let conns = (line.getAttribute('data-connections') || '').split(',').map(s => s.trim());
+                if (activeAction === 'resize-line') {
+                  if (conns.length === 1) conns.push('');
+                  if (resizeDir === 'handle-line-p1') conns[0] = targetEl.getAttribute('id');
+                  else if (resizeDir === 'handle-line-p2') conns[1] = targetEl.getAttribute('id');
+                } else {
+                  const ptIdx = parseInt(resizeDir.split('-')[2]);
+                  while (conns.length <= ptIdx) conns.push('');
+                  conns[ptIdx] = targetEl.getAttribute('id');
+                }
+                
+                if (conns.some(c => c)) {
+                  line.setAttribute('data-connections', conns.join(','));
+                  if (targetEl.parentNode) targetEl.parentNode.appendChild(targetEl);
+                } else {
+                  line.removeAttribute('data-connections');
+                }
+                
+                updateAllConnectedLines();
+              } else {
+                let conns = (line.getAttribute('data-connections') || '').split(',').map(s => s.trim());
+                
+                if (activeAction === 'resize-line') {
+                  if (conns.length === 1) conns.push('');
+                  if (resizeDir === 'handle-line-p1') conns[0] = '';
+                  else if (resizeDir === 'handle-line-p2') conns[1] = '';
+                } else {
+                  const ptIdx = parseInt(resizeDir.split('-')[2]);
+                  while(conns.length <= ptIdx) conns.push('');
+                  conns[ptIdx] = '';
+                }
+                
+                if (conns.some(c => c)) line.setAttribute('data-connections', conns.join(','));
+            }
+            selectionOverlay.style.display = prevDisplay;
+            updateSelectionOverlay();
+          }
+          activeAction = null; updateCodeFromDOM();
+        }
       });
 
       window.addEventListener('keydown', (e) => {
@@ -872,7 +1163,7 @@
           if (selectedElements.length > 0) {
             e.preventDefault(); isArrowMoving = true; const step = e.shiftKey ? 10 : 1; let dx = 0, dy = 0;
             if (e.key === 'ArrowUp') dy = -step; if (e.key === 'ArrowDown') dy = step; if (e.key === 'ArrowLeft') dx = -step; if (e.key === 'ArrowRight') dx = step;
-            selectedElements.forEach(el => applyDelta(el, el.cloneNode(true), dx, dy)); updateSelectionOverlay();
+            selectedElements.forEach(el => { applyDelta(el, el.cloneNode(true), dx, dy); updateConnectedLines(el); }); updateSelectionOverlay();
           }
         }
       });
@@ -932,7 +1223,7 @@
               case 'left': dx = mX - b.x; break; case 'right': dx = MX - (b.x + b.width); break; case 'top': dy = mY - b.y; break; case 'bottom': dy = MY - (b.y + b.height); break;
               case 'center horizontally': dx = gCX - (b.x + b.width / 2); break; case 'center vertically': dy = gCY - (b.y + b.height / 2); break;
             }
-            if (dx !== 0 || dy !== 0) applyDelta(el, el.cloneNode(true), dx, dy);
+            if (dx !== 0 || dy !== 0) { applyDelta(el, el.cloneNode(true), dx, dy); updateConnectedLines(el); }
         });
         updateCodeFromDOM(); updateSelectionOverlay();
       }
