@@ -61,6 +61,9 @@
         <button id="btn-add-line" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-sm font-medium rounded-md transition-colors border border-gray-200">
           + Line
         </button>
+        <button id="btn-add-polyline" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-sm font-medium rounded-md transition-colors border border-gray-200">
+          + Polyline
+        </button>
         <button id="btn-add-text" class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-sm font-medium rounded-md transition-colors border border-gray-200">
           + Text
         </button>
@@ -144,6 +147,9 @@
             <button id="btn-toggle-props" class="text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-0.5 rounded transition-colors hidden">
                 Show Properties
             </button>
+            <button id="btn-format-svg" class="text-[10px] bg-gray-700 hover:bg-gray-600 text-white px-2 py-0.5 rounded transition-colors" title="Format SVG Code">
+                Format
+            </button>
         </div>
         <span class="text-xs text-green-400 opacity-0 transition-opacity duration-300" id="sync-indicator">Synced ✓</span>
       </div>
@@ -200,6 +206,12 @@
       <div class="absolute bottom-4 right-4 bg-white/90 backdrop-blur text-xs text-gray-600 px-3 py-2 rounded shadow border border-gray-200 pointer-events-none">
         Select: Click &bull; Multi-select: Shift + Click &bull; Delete: Backspace/Del
       </div>
+      
+      <div class="absolute bottom-4 left-4 flex items-center bg-white/90 backdrop-blur rounded shadow border border-gray-200 pointer-events-auto">
+        <button id="btn-zoom-out" class="px-2 py-1.5 hover:bg-gray-100 text-gray-600 border-r border-gray-200 font-bold" title="Zoom Out">-</button>
+        <span id="zoom-level" class="px-3 py-1.5 text-xs font-mono text-gray-600 flex items-center justify-center w-16 select-none cursor-pointer" title="Reset Zoom">100%</span>
+        <button id="btn-zoom-in" class="px-2 py-1.5 hover:bg-gray-100 text-gray-600 border-l border-gray-200 font-bold" title="Zoom In">+</button>
+      </div>
     </div>
     
   </main>
@@ -221,9 +233,13 @@
       const propertiesPanel = document.getElementById('properties-panel');
       const btnToggleProps = document.getElementById('btn-toggle-props');
       const btnCloseProps = document.getElementById('btn-close-props');
+      const btnZoomIn = document.getElementById('btn-zoom-in');
+      const btnZoomOut = document.getElementById('btn-zoom-out');
+      const zoomLevelLabel = document.getElementById('zoom-level');
 
       // -- Shared State Variables (Declared early to prevent ReferenceErrors) --
       let selectedElements = [];
+      let canvasScale = 1;
       let isSyncing = false;
       let syncTimeout;
       let undoStack = [];
@@ -237,6 +253,30 @@
       let typeTimeout;
       const origState = new Map();
       let groupBBox = null, resizeDir = null;
+      let drawingPolyline = false;
+      let currentPolyline = null;
+
+      function finishPolyline() {
+          if (drawingPolyline && currentPolyline) {
+              const pts = currentPolyline.getAttribute('points');
+              if (pts) {
+                 const ptsArr = pts.trim().split(/\s+/).filter(Boolean);
+                 if (ptsArr.length > 1) {
+                     ptsArr.pop(); // remove preview point
+                     currentPolyline.setAttribute('points', ptsArr.join(' '));
+                 }
+                 if (ptsArr.length <= 1) {
+                     currentPolyline.remove();
+                     selectedElements = [];
+                 }
+              }
+              drawingPolyline = false;
+              currentPolyline = null;
+              updateCodeFromDOM();
+              updateSelectionOverlay();
+              showToast('Polyline finished', 'success');
+          }
+      }
 
       // -- CORE UTILITY FUNCTIONS (Defined early) --
 
@@ -251,6 +291,37 @@
         container.appendChild(toast);
         requestAnimationFrame(() => toast.classList.remove('translate-y-4', 'opacity-0'));
         setTimeout(() => { toast.classList.add('opacity-0'); setTimeout(() => toast.remove(), 300); }, 3000);
+      }
+
+      /**
+       * Formats a minified SVG string with proper indentation.
+       * @param {string} svgString - The raw SVG code.
+       * @param {number} indent - Number of spaces for indentation (default 2).
+       * @returns {string} - The formatted SVG string.
+       */
+      function formatSVG(svgString, indent = 2) {
+          let formatted = '';
+          let pad = 0;
+
+          // Split the string into tags and filter out empty strings
+          const tokens = svgString.split(/(<[^>]*>)/).filter(t => t.trim() !== "");
+
+          tokens.forEach(token => {
+              // Check if the token is a closing tag
+              if (token.match(/^<\/\w/)) {
+                  pad--;
+              }
+
+              // Add the indentation
+              formatted += ' '.repeat(Math.max(0, pad * indent)) + token + '\n';
+
+              // Check if the token is an opening tag (and not self-closing or a declaration)
+              if (token.match(/^<\w[^>]*[^\/]>$/) && !token.match(/<(img|br|hr|input)/)) {
+                  pad++;
+              }
+          });
+
+          return formatted.trim();
       }
 
       function cleanAndFormatSVG(svgNode) {
@@ -405,6 +476,13 @@
 
       btnCloseProps.addEventListener('click', closeSidebar);
       btnToggleProps.addEventListener('click', openSidebar);
+      
+      document.getElementById('btn-format-svg').addEventListener('click', () => {
+          const codeEl = document.getElementById('svg-code');
+          codeEl.value = formatSVG(codeEl.value);
+          updateDOMFromCode();
+          showToast('SVG Formatted', 'success');
+      });
 
       // -- Panel Resizers --
       panelResizer.addEventListener('mousedown', (e) => {
@@ -499,6 +577,26 @@
         URL.revokeObjectURL(url);
         showToast('SVG Downloaded', 'success');
       });
+
+      // -- Zoom Controls --
+      function setZoom(scale) {
+         canvasScale = Math.max(0.1, Math.min(scale, 5));
+         canvasContainer.style.transform = `scale(${canvasScale})`;
+         canvasContainer.style.transformOrigin = 'center';
+         zoomLevelLabel.textContent = `${Math.round(canvasScale * 100)}%`;
+         if (selectedElements.length > 0) updateSelectionOverlay();
+      }
+
+      btnZoomIn.addEventListener('click', () => setZoom(canvasScale + 0.1));
+      btnZoomOut.addEventListener('click', () => setZoom(canvasScale - 0.1));
+      zoomLevelLabel.addEventListener('click', () => setZoom(1));
+      
+      const canvasWrapper = canvasContainer.parentElement;
+      canvasWrapper.addEventListener('wheel', (e) => {
+         e.preventDefault();
+         const delta = e.deltaY > 0 ? -0.1 : 0.1;
+         setZoom(canvasScale + delta);
+      }, { passive: false });
 
       // -- Tool States --
 
@@ -847,10 +945,10 @@
           maxX = Math.max(maxX, rect.right); maxY = Math.max(maxY, rect.bottom);
         });
         selectionOverlay.style.display = 'block';
-        selectionOverlay.style.left = `${(minX - containerRect.left) - 4}px`;
-        selectionOverlay.style.top = `${(minY - containerRect.top) - 4}px`;
-        selectionOverlay.style.width = `${(maxX - minX) + 8}px`;
-        selectionOverlay.style.height = `${(maxY - minY) + 8}px`;
+        selectionOverlay.style.left = `${(minX - containerRect.left) / canvasScale - 4}px`;
+        selectionOverlay.style.top = `${(minY - containerRect.top) / canvasScale - 4}px`;
+        selectionOverlay.style.width = `${(maxX - minX) / canvasScale + 8}px`;
+        selectionOverlay.style.height = `${(maxY - minY) / canvasScale + 8}px`;
         
         const isLine = selectedElements.length === 1 && selectedElements[0].tagName.toLowerCase() === 'line';
         const isPathLike = selectedElements.length === 1 && ['polyline', 'polygon'].includes(selectedElements[0].tagName.toLowerCase());
@@ -867,10 +965,10 @@
             pt2.x = parseFloat(line.getAttribute('x2')||0); pt2.y = parseFloat(line.getAttribute('y2')||0);
             const sp1 = pt1.matrixTransform(matrix), sp2 = pt2.matrixTransform(matrix);
             const ovL = parseFloat(selectionOverlay.style.left), ovT = parseFloat(selectionOverlay.style.top);
-            document.getElementById('handle-line-p1').style.left = `${sp1.x - containerRect.left - ovL}px`;
-            document.getElementById('handle-line-p1').style.top = `${sp1.y - containerRect.top - ovT}px`;
-            document.getElementById('handle-line-p2').style.left = `${sp2.x - containerRect.left - ovL}px`;
-            document.getElementById('handle-line-p2').style.top = `${sp2.y - containerRect.top - ovT}px`;
+            document.getElementById('handle-line-p1').style.left = `${(sp1.x - containerRect.left) / canvasScale - ovL}px`;
+            document.getElementById('handle-line-p1').style.top = `${(sp1.y - containerRect.top) / canvasScale - ovT}px`;
+            document.getElementById('handle-line-p2').style.left = `${(sp2.x - containerRect.left) / canvasScale - ovL}px`;
+            document.getElementById('handle-line-p2').style.top = `${(sp2.y - containerRect.top) / canvasScale - ovT}px`;
         } else if (isPathLike) {
             selectionOverlay.classList.remove('border', 'border-indigo-500'); selectionOverlay.style.background = 'transparent';
             const pEl = selectedElements[0], matrix = pEl.getScreenCTM();
@@ -885,8 +983,8 @@
                     const handle = document.createElement('div');
                     handle.className = 'absolute w-3 h-3 bg-white border border-indigo-500 rounded-full -translate-x-1.5 -translate-y-1.5 cursor-crosshair pointer-events-auto resize-handle poly-handle';
                     handle.id = 'handle-poly-' + (i/2);
-                    handle.style.left = `${spt.x - containerRect.left - ovL}px`;
-                    handle.style.top = `${spt.y - containerRect.top - ovT}px`;
+                    handle.style.left = `${(spt.x - containerRect.left) / canvasScale - ovL}px`;
+                    handle.style.top = `${(spt.y - containerRect.top) / canvasScale - ovT}px`;
                     selectionOverlay.appendChild(handle);
                 }
             }
@@ -952,7 +1050,36 @@
 
       // -- Interaction Event Listeners --
 
+      canvasContainer.addEventListener('contextmenu', (e) => {
+          if (drawingPolyline) {
+              e.preventDefault();
+              finishPolyline();
+          }
+      });
+
       canvasContainer.addEventListener('mousedown', (e) => {
+        if (drawingPolyline) {
+          if (e.button === 2) { 
+             finishPolyline();
+             e.preventDefault();
+             return;
+          }
+          const pt = getSVGPoint(e.clientX, e.clientY);
+          const newPt = `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`;
+          const pts = currentPolyline.getAttribute('points');
+          if (!pts) {
+             currentPolyline.setAttribute('points', `${newPt} ${newPt}`); 
+          } else {
+             const ptsArr = pts.trim().split(/\s+/).filter(Boolean);
+             ptsArr[ptsArr.length - 1] = newPt; 
+             ptsArr.push(newPt); 
+             currentPolyline.setAttribute('points', ptsArr.join(' '));
+          }
+          updateSelectionOverlay();
+          e.preventDefault();
+          return;
+        }
+
         if (e.target.classList.contains('resize-handle')) {
           resizeDir = e.target.id;
           if (resizeDir.startsWith('handle-line')) activeAction = 'resize-line';
@@ -986,19 +1113,32 @@
           if (!e.shiftKey) selectedElements = [];
           updateSelectionOverlay();
           const r = canvasContainer.getBoundingClientRect(), mb = document.getElementById('marquee-box');
-          mb.style.display = 'block'; mb.style.left = `${e.clientX - r.left}px`; mb.style.top = `${e.clientY - r.top}px`;
+          mb.style.display = 'block'; mb.style.left = `${(e.clientX - r.left) / canvasScale}px`; mb.style.top = `${(e.clientY - r.top) / canvasScale}px`;
           mb.style.width = mb.style.height = '0px'; e.preventDefault();
         }
       });
 
       window.addEventListener('mousemove', (e) => {
+        if (drawingPolyline && currentPolyline) {
+          const pt = getSVGPoint(e.clientX, e.clientY);
+          const pts = currentPolyline.getAttribute('points');
+          if (pts) {
+             const ptsArr = pts.trim().split(/\s+/).filter(Boolean);
+             if (ptsArr.length > 0) {
+                 ptsArr[ptsArr.length - 1] = `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`;
+                 currentPolyline.setAttribute('points', ptsArr.join(' '));
+                 updateSelectionOverlay();
+             }
+          }
+          return;
+        }
         if (!activeAction) return;
         const cp = getSVGPoint(e.clientX, e.clientY), dx = cp.x - startPt?.x, dy = cp.y - startPt?.y;
         if (activeAction === 'drag' && selectedElements.length > 0) selectedElements.forEach(el => { applyDelta(el, origState.get(el), dx, dy); updateConnectedLines(el); });
         else if (activeAction === 'marquee') {
           const r = canvasContainer.getBoundingClientRect(), minX = Math.min(marqueeStart.x, e.clientX), minY = Math.min(marqueeStart.y, e.clientY), maxX = Math.max(marqueeStart.x, e.clientX), maxY = Math.max(marqueeStart.y, e.clientY);
           const mb = document.getElementById('marquee-box');
-          mb.style.left = `${minX - r.left}px`; mb.style.top = `${minY - r.top}px`; mb.style.width = `${maxX - minX}px`; mb.style.height = `${maxY - minY}px`;
+          mb.style.left = `${(minX - r.left) / canvasScale}px`; mb.style.top = `${(minY - r.top) / canvasScale}px`; mb.style.width = `${(maxX - minX) / canvasScale}px`; mb.style.height = `${(maxY - minY) / canvasScale}px`;
           return;
         } else if (activeAction === 'resize-line' && selectedElements.length > 0) {
           const line = selectedElements[0], lp = getLocalSVGPoint(e.clientX, e.clientY, line);
@@ -1104,7 +1244,10 @@
       });
 
       window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') closeSidebar();
+        if (e.key === 'Escape') {
+            if (drawingPolyline) finishPolyline();
+            else closeSidebar();
+        }
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
           if (document.activeElement.tagName !== 'INPUT' && document.activeElement !== codeEl) {
             e.preventDefault();
@@ -1180,6 +1323,18 @@
       document.getElementById('btn-add-line').addEventListener('click', () => {
         const l = document.createElementNS('http://www.w3.org/2000/svg', 'line'); l.setAttribute('x1', 100); l.setAttribute('y1', 100); l.setAttribute('x2', 250); l.setAttribute('y2', 250); l.setAttribute('stroke', '#10b981'); l.setAttribute('stroke-width', '4');
         getRootSVG().appendChild(l); selectedElements = [l]; updateCodeFromDOM(); updateSelectionOverlay();
+      });
+      document.getElementById('btn-add-polyline').addEventListener('click', () => {
+        drawingPolyline = true;
+        currentPolyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        currentPolyline.setAttribute('fill', 'none');
+        currentPolyline.setAttribute('stroke', '#f59e0b');
+        currentPolyline.setAttribute('stroke-width', '4');
+        currentPolyline.setAttribute('points', '');
+        getRootSVG().appendChild(currentPolyline);
+        selectedElements = [currentPolyline];
+        updateSelectionOverlay();
+        showToast('Click on canvas to add points. Right-click or ESC to finish.', 'info');
       });
       document.getElementById('btn-add-text').addEventListener('click', () => {
         const t = document.createElementNS('http://www.w3.org/2000/svg', 'text'); t.setAttribute('x', 200); t.setAttribute('y', 200); t.setAttribute('font-family', 'sans-serif'); t.setAttribute('font-size', '24'); t.setAttribute('fill', '#333333'); t.textContent = 'New Text';
