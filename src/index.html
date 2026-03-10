@@ -877,41 +877,50 @@
           isSyncing = true;
           const parser = new DOMParser();
           const doc = parser.parseFromString(codeEl.value, "image/svg+xml");
-          if (!doc.querySelector("parsererror")) {
-            const oldSvg = getRootSVG();
-            const currentIndices = selectedElements.map((el) => {
-              if (!oldSvg) return -1;
-              return Array.from(oldSvg.querySelectorAll("*")).indexOf(el);
-            });
+          const errorNode = doc.querySelector("parsererror");
 
-            renderTarget.innerHTML = "";
-            const svg = doc.documentElement;
-            const vbAttr = svg.getAttribute("viewBox");
-            if (vbAttr) {
-              const vb = vbAttr.split(/[\s,]+/).map(parseFloat);
-              if (vb.length === 4) {
-                canvasContainer.style.width = `${vb[2]}px`;
-                canvasContainer.style.height = `${vb[3]}px`;
-              }
-            }
-            svg.setAttribute("width", "100%");
-            svg.setAttribute("height", "100%");
-            renderTarget.appendChild(svg);
-
-            if (updateAllConnectedLines()) {
-              // Avoid recursion: just update code locally without pushing undo
-              const newSVGStr = cleanAndFormatSVG(getRootSVG());
-              codeEl.value = newSVGStr;
-            }
-
-            const newChildren = Array.from(svg.querySelectorAll("*"));
-            selectedElements = currentIndices
-              .map((idx) => (idx !== -1 ? newChildren[idx] : null))
-              .filter(Boolean);
-
-            updateSelectionOverlay();
-            flashSyncIndicator();
+          if (errorNode) {
+            const errorMsg = errorNode.textContent.split("\n")[0];
+            showToast(`SVG Syntax Error: ${errorMsg}`, "error");
+            codeEl.classList.add("border-red-500", "ring-1", "ring-red-500");
+            isSyncing = false;
+            return;
           }
+
+          codeEl.classList.remove("border-red-500", "ring-1", "ring-red-500");
+          const oldSvg = getRootSVG();
+          const currentIndices = selectedElements.map((el) => {
+            if (!oldSvg) return -1;
+            return Array.from(oldSvg.querySelectorAll("*")).indexOf(el);
+          });
+
+          renderTarget.innerHTML = "";
+          const svg = doc.documentElement;
+          const vbAttr = svg.getAttribute("viewBox");
+          if (vbAttr) {
+            const vb = vbAttr.split(/[\s,]+/).map(parseFloat);
+            if (vb.length === 4) {
+              canvasContainer.style.width = `${vb[2]}px`;
+              canvasContainer.style.height = `${vb[3]}px`;
+            }
+          }
+          svg.setAttribute("width", "100%");
+          svg.setAttribute("height", "100%");
+          renderTarget.appendChild(svg);
+
+          if (updateAllConnectedLines()) {
+            // Avoid recursion: just update code locally without pushing undo
+            const newSVGStr = cleanAndFormatSVG(getRootSVG());
+            codeEl.value = newSVGStr;
+          }
+
+          const newChildren = Array.from(svg.querySelectorAll("*"));
+          selectedElements = currentIndices
+            .map((idx) => (idx !== -1 ? newChildren[idx] : null))
+            .filter(Boolean);
+
+          updateSelectionOverlay();
+          flashSyncIndicator();
           isSyncing = false;
         }
 
